@@ -8,12 +8,15 @@
 class Viddler_V2 {
 
   public $api_key          = NULL;
-  public $response_type    = 'php';
   public $log_path         = '';
+  public $response_time    = 0;
+  public $response_type    = 'php';
   
-  protected $attempts     = 0;
+  protected $attempt      = 1;
+  protected $end_time     = 0;
   protected $max_attempts = 10;
   protected $query        = array();
+  protected $start_time   = 0;
   protected $url          = NULL;
   
   /**
@@ -35,7 +38,10 @@ class Viddler_V2 {
     $__viddler = new Viddler_V2('YOUR KEY');
     $result = $__viddler->viddler_users_getProfile(array("user"=>"phpfunk"));
   **/
-  public function __call($method, $args) { return self::call($method, $args, "object"); }
+  public function __call($method, $args) { 
+    $this->start_time = $this->timer();
+    return self::call($method, $args, "object");
+  }
   
   /**
   Method: call
@@ -129,12 +135,12 @@ class Viddler_V2 {
         }
         
         if ($k == 'response_type') {
-          $this->url = (str_replace('.' . $this->response_type, '.' . $v, $this->url);
+          $this->url = str_replace('.' . $this->response_type, '.' . $v, $this->url);
+          $this->response_type = $v;
         }
       }
       
-      $query_arr = $this->query;
-      $this->query = implode("&", $this->query);
+      $this->query = (empty($binary)) ? implode("&", $this->query) : $args[0];
       if ($post === FALSE) {
         $this->url .= (! empty($this->query)) ? "&" . $this->query : "";
       }
@@ -144,21 +150,38 @@ class Viddler_V2 {
       $args[0] = array();
     }
     
-    if (! empty($binary)) {
-      $this->query
-    }
-    
     //Attempt to get a valid response upto the max_attempts set
-    for ($this->attempts; $this->attempts < $this->max_attempts; $this->attempts++) {
+    for ($this->attempt; $this->attempt <= $this->max_attempts; $this->attempt++) {
+      $this->response_time = $this->timer();
       $response = $this->request($args[0], $post, $binary);
       if (! empty($response)) {
+        $this->attempt = 1;
         return $response;
       }
     }
     
   }
   
-  protected function request($args, $post, $binary)
+  protected function log($response, $info)
+  {
+    $this->end_time = number_format($this->timer() - $this->start_time, '5', '.', '');
+    if (! empty($this->log_path)) {
+      $text = 'Date: ' . date('m/d/Y - h:i:s A') . "\n";
+      $text .= 'Attempt: ' . $this->attempt . ' of ' . $this->max_attempts . "\n";
+      foreach ($info as $k => $v) {
+        $text .= $k . ': ' . $v . "\n";
+      }
+      $text .= 'API Response Time: ' . $this->response_time . " seconds \n";
+      $text .= 'Total Time: ' . $this->end_time . " seconds \n";
+      $text .= 'Response: ' . $response . "\n";
+      $text .= '-----------------------------------------------' . "\n";
+      $fp = fopen($this->log_path, 'a');
+      fwrite($fp, $text);
+      fclose($fp);
+    }
+  }
+  
+  protected function request($args, $post)
   {
     // Custruct the cURL call
     $ch = curl_init();
@@ -171,38 +194,34 @@ class Viddler_V2 {
     // Figure POST vs. GET
     if ($post == TRUE) {
       curl_setopt($ch, CURLOPT_POST, TRUE);
-      if ($binary === TRUE) {
-        $binary_args = array();
-        foreach($args as $k => $v) {
-          if($k != 'file') $binary_args[$k] = $v;
-        }
-        
-        if (! isset($binary_args['key'])) $binary_args['key'] = $this->api_key;
-        $binary_args['file'] = $args['file'];
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $binary_args);
-      }
-      else {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $this->query);
-      }
+      curl_setopt($ch, CURLOPT_POSTFIELDS, $this->query);
     }
     else {
       curl_setopt($ch, CURLOPT_HTTPGET, TRUE);
     }
     
-    //G et the response
+    //Get the response
     $response = curl_exec($ch);
+    $this->response_time = number_format($this->timer() - $this->response_time, '5', '.', '');
+    $info     = curl_getinfo($ch);
     
-    if (! $response) {
-      $response = $error = curl_error($ch);
-      return $response;
-    }
-    else {
-      $response = unserialize($response);
+    if (! $response || empty($response) || $info['http_code'] != '200') {
+      $response = curl_error($ch);
+      $this->log($response, $info);
+      $response['response'] = $response;
+      return ($this->attempt >= $this->max_attempts) ? array_merge($response, $info) : false;
     }
     
     curl_close($ch);
-    return $response;
+    $this->log($response, $info);
+    return ($this->response_type == 'php') ? unserialize($response) : $response;
   }
+  
+  protected function timer()
+	{
+		list($msec, $sec) = explode(' ' , microtime());
+		return ((float)$msec + (float)$sec);
+	}
 }
 
 ?>
