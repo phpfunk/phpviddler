@@ -5,42 +5,55 @@
   http://developers.viddler.com/projects/api-wrappers/phpviddler/
 */
 
-/* Viddler Class
-  use $var = new Viddler_V2(API KEY); */
 class Viddler_V2 {
-  public $api_key = NULL;
+
+  public $api_key          = NULL;
+  public $response_type    = 'php';
+  public $log_path         = '';
   
-  // Construct! Like the Matrix.
-  public function __construct($api_key) {
-    if (!$api_key) {
-      return FALSE;
-    } else {
+  protected $attempts     = 0;
+  protected $max_attempts = 10;
+  protected $query        = array();
+  protected $url          = NULL;
+  
+  /**
+  Constuctor
+  - If API Key is NOT empty, set to $obj->api_key
+  **/
+  public function __construct($api_key=NULL, $response_type='php') {
+    if (! empty($api_key)) {
       $this->api_key = $api_key;
     }
+    $this->response_type = $response_type;
   }
 
   /**
-  Can be called like such:
-  $__api = new Viddler_API("YOUR KEY");
-  $array = $__api->viddler_users_getProfile(array("user"=>"phpfunk"));
+  Method: __call (It's magic!)
+  - This method will be called for every API call and sent to correct location
+  
+  - Can be called like such:
+    $__viddler = new Viddler_V2('YOUR KEY');
+    $result = $__viddler->viddler_users_getProfile(array("user"=>"phpfunk"));
   **/
   public function __call($method, $args) { return self::call($method, $args, "object"); }
   
+  /**
+  Method: call
+   - This method is called on every API method call. It figures out if the method exists,
+   if not it calls the Viddler API, otherwise it calls the method.
+  **/
   protected function call($method, $args, $call)
   { 
     /**
     Format the Method
     Accepted Formats:
-    
-    $viddler->viddler_users_auth();
+    $__viddler->viddler_users_auth();
+    Turns into: viddler.users.auth
     **/
     $method = str_replace("_", ".", $method);
     
     //If the method exists here, call it
     if (method_exists($this, $method)) { return $this->$method($args[0]); }
-    
-    // Used to construct the querystring.
-    $query = array();
     
     // Methods that require HTTPS
     $secure_methods = array(
@@ -100,39 +113,56 @@ class Viddler_V2 {
     
     // Build API endpoint URL
     // This is generally used to switch the end-point for uploads. See /examples/uploadExample.php in PHPViddler 2
-    if(isset($args[1])) {
-      $url = $args[1];
-    } else {
-      $url = $protocol . "://api.viddler.com/api/v2/" . $method . ".php";
-    }
+    $this->url = (isset($args[1])) ? $args[1] : $protocol . '://api.viddler.com/api/v2/' . $method . '.' . $this->response_type;
     
     if ($post === TRUE) { // Is a post method
-        array_push($query, "key=" . $this->api_key); // Adds API key to the POST arguments array
+        array_push($this->query, "key=" . $this->api_key); // Adds API key to the POST arguments array
     } else {
-      $url .= "?key=" . $this->api_key;
+      $this->url .= "?key=" . $this->api_key;
     }
     
     //Figure the query string
     if (@count($args[0]) > 0 && is_array($args[0])) {
       foreach ($args[0] as $k => $v) {
-        if ($k != "response_type" && $k != "api_key") {
-          array_push($query, "$k=$v");
+        if ($k != 'response_type' && $k != 'api_key') {
+          array_push($this->query, $k . '=' . $v);
+        }
+        
+        if ($k == 'response_type') {
+          $this->url = (str_replace('.' . $this->response_type, '.' . $v, $this->url);
         }
       }
-      $query_arr = $query;
-      $query = implode("&", $query);
+      
+      $query_arr = $this->query;
+      $this->query = implode("&", $this->query);
       if ($post === FALSE) {
-        $url .= (!empty($query)) ? "&" . $query : "";
+        $this->url .= (! empty($this->query)) ? "&" . $this->query : "";
       }
     }
     else {
-      $query = NULL;
+      $this->query = NULL;
       $args[0] = array();
     }
     
+    if (! empty($binary)) {
+      $this->query
+    }
+    
+    //Attempt to get a valid response upto the max_attempts set
+    for ($this->attempts; $this->attempts < $this->max_attempts; $this->attempts++) {
+      $response = $this->request($args[0], $post, $binary);
+      if (! empty($response)) {
+        return $response;
+      }
+    }
+    
+  }
+  
+  protected function request($args, $post, $binary)
+  {
     // Custruct the cURL call
     $ch = curl_init();
-    curl_setopt ($ch, CURLOPT_URL, $url);
+    curl_setopt ($ch, CURLOPT_URL, $this->url);
     curl_setopt ($ch, CURLOPT_RETURNTRANSFER, 1);
     curl_setopt ($ch, CURLOPT_HEADER, 0);
     curl_setopt ($ch, CURLOPT_TIMEOUT, 0);
@@ -143,17 +173,16 @@ class Viddler_V2 {
       curl_setopt($ch, CURLOPT_POST, TRUE);
       if ($binary === TRUE) {
         $binary_args = array();
-        foreach($args[0] as $k=>$v) {
+        foreach($args as $k => $v) {
           if($k != 'file') $binary_args[$k] = $v;
         }
         
-        if(!isset($binary_args['key'])) $binary_args['key'] = $this->api_key;
-        $binary_args['file'] = $args[0]['file'];
-        
+        if (! isset($binary_args['key'])) $binary_args['key'] = $this->api_key;
+        $binary_args['file'] = $args['file'];
         curl_setopt($ch, CURLOPT_POSTFIELDS, $binary_args);
       }
       else {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $query);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $this->query);
       }
     }
     else {
@@ -163,9 +192,8 @@ class Viddler_V2 {
     //G et the response
     $response = curl_exec($ch);
     
-    if (!$response) {
+    if (! $response) {
       $response = $error = curl_error($ch);
-      
       return $response;
     }
     else {
